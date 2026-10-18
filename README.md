@@ -1,579 +1,517 @@
-import os, textwrap, zipfile
+import os, zipfile, json, textwrap
 
-root = "/mnt/data/FourRealmsUnityStarter"
+root = "/mnt/data/FourDimensionVoxelSurvival"
+os.makedirs(root + "/Assets/Scripts", exist_ok=True)
+os.makedirs(root + "/Assets/Editor", exist_ok=True)
+os.makedirs(root + "/Packages", exist_ok=True)
+os.makedirs(root + "/ProjectSettings", exist_ok=True)
+
 files = {
-"README.md": r"""
-# Four Realms — Unity Voxel Survival Starter
-
-A small, original Unity 3D starter project for a Minecraft-inspired voxel survival sandbox. It includes a procedural block terrain, first-person movement, block breaking/placing, survival and creative modes, a hotbar, basic crafting, hostile slimes, a villager-like NPC, melee combat, a boss, and four realm portals.
-
-This is a **playable prototype scaffold**, not a finished commercial game. The included editor bootstrapper creates a demo scene from primitive meshes, so no paid assets are required.
-
-## Requirements
-- Unity 2022.3 LTS or newer (3D Core project)
-- Desktop keyboard and mouse
-
-## Quick start
-1. In Unity Hub, create a new **3D Core** project named `FourRealms`.
-2. Close Unity.
-3. Copy the `Assets` folder from this package into the new project's folder, merging if asked.
-4. Reopen the project and wait for scripts to compile.
-5. In Unity, select **Four Realms > Create Playable Demo Scene** from the top menu.
-6. Open `Assets/Scenes/FourRealmsDemo.unity` if it did not open automatically.
-7. Press **Play**.
-
-## Controls
-- WASD: move
-- Mouse: look (click the Game view first)
-- Space: jump
-- Left Shift: sprint
-- Left mouse: mine block / attack
-- Right mouse: place selected block
-- 1–5: select hotbar slot
-- E: toggle Survival / Creative
-- C: craft a basic block bundle (survival mode)
-- F: interact with a nearby realm portal
-- Esc: release mouse
-
-## Included systems
-- Four stylized realms: Overworld, Nether, Aether and End, with portals to switch between them.
-- Procedurally generated, simple block terrain and realm-specific palettes.
-- First-person controller with sprint and jump.
-- Block mining and placement with a small inventory/hotbar.
-- Survival health, basic crafting, and creative mode with unlimited blocks.
-- Slime enemies that chase and damage the player.
-- Villager NPCs as village markers/ambient characters.
-- Melee attacks, health bars represented through simple UI text, and a boss enemy.
-- Editor menu to create a demo scene with lighting, camera, player, terrain, mobs and portals.
-
-## Notes / limitations
-- The terrain is generated from Unity cube primitives for clarity and ease of editing; it is not chunk-meshed or optimized for large worlds.
-- Textures are represented by procedural materials/colors. Replace them with your own pixel textures/materials for richer visuals.
-- This starter uses Unity's built-in Input APIs (`Input.GetAxis`, `Input.GetKey`). If the project is configured for the new Input System only, set **Project Settings > Player > Active Input Handling** to **Both** or **Input Manager (Old)**.
-- The bootstrapper generates a demo scene and primitive geometry, not imported assets or a polished release build.
-- Use original names/artwork and your own assets when expanding the game.
-""",
-"Assets/Scripts/RealmType.cs": r"""
-public enum RealmType
-{
-    Overworld,
-    Nether,
-    Aether,
-    End
-}
-""",
-"Assets/Scripts/RealmManager.cs": r"""
-using UnityEngine;
-using UnityEngine.SceneManagement;
-
-public class RealmManager : MonoBehaviour
-{
-    public static RealmManager Instance { get; private set; }
-    public RealmType CurrentRealm { get; private set; } = RealmType.Overworld;
-    public Transform player;
-    public VoxelWorld world;
-    public string statusMessage = "Overworld — gather, build, survive";
-    private float messageUntil;
-
-    void Awake()
-    {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
-        Instance = this;
-    }
-
-    public void SwitchRealm(RealmType realm)
-    {
-        CurrentRealm = realm;
-        if (world != null) world.Generate(realm);
-        if (player != null) player.position = new Vector3(0, 12, 0);
-        statusMessage = realm + " — realm changed";
-        messageUntil = Time.time + 4f;
-        if (HUDController.Instance != null) HUDController.Instance.ShowMessage(statusMessage);
-    }
-
-    public void SetMessage(string message)
-    {
-        statusMessage = message;
-        messageUntil = Time.time + 3f;
-        if (HUDController.Instance != null) HUDController.Instance.ShowMessage(message);
-    }
-}
-""",
-"Assets/Scripts/VoxelWorld.cs": r"""
+"Assets/Scripts/VoxelGameBootstrap.cs": r'''
 using UnityEngine;
 using System.Collections.Generic;
 
-public class VoxelWorld : MonoBehaviour
+public class VoxelGameBootstrap : MonoBehaviour
 {
-    public int width = 36;
-    public int depth = 36;
-    public int baseHeight = 3;
-    public Material grass, dirt, stone, sand, nether, aether, endStone, wood, leaves;
-    private readonly Dictionary<Vector3Int, GameObject> blocks = new Dictionary<Vector3Int, GameObject>();
-    private RealmType realm = RealmType.Overworld;
-
-    public void Generate(RealmType type)
-    {
-        realm = type;
-        foreach (var block in blocks.Values) if (block) Destroy(block);
-        blocks.Clear();
-        var old = transform.Find("Generated");
-        if (old) Destroy(old.gameObject);
-        var holder = new GameObject("Generated").transform;
-        holder.SetParent(transform, false);
-        for (int x = -width / 2; x < width / 2; x++)
-        for (int z = -depth / 2; z < depth / 2; z++)
-        {
-            float n = Mathf.PerlinNoise((x + 100f) * .12f, (z + 100f) * .12f);
-            int h = baseHeight + Mathf.RoundToInt(n * 3f);
-            for (int y = 0; y <= h; y++)
-            {
-                Material m = y == h ? TopMaterial(type) : (y >= h - 2 ? MidMaterial(type) : DeepMaterial(type));
-                CreateBlock(new Vector3Int(x, y, z), m, holder);
-            }
-        }
-        // Small trees in the Overworld and Aether.
-        if (type == RealmType.Overworld || type == RealmType.Aether)
-        {
-            for (int i = 0; i < 13; i++)
-            {
-                int x = Random.Range(-width/2 + 3, width/2 - 3);
-                int z = Random.Range(-depth/2 + 3, depth/2 - 3);
-                int h = baseHeight + 2;
-                for (int y = h; y < h + 3; y++) CreateBlock(new Vector3Int(x, y, z), wood, holder);
-                for (int dx=-2; dx<=2; dx++) for (int dz=-2; dz<=2; dz++)
-                for (int dy=2; dy<=4; dy++)
-                    if (Mathf.Abs(dx)+Mathf.Abs(dz)+(dy==4?1:0) < 5)
-                        CreateBlock(new Vector3Int(x+dx, h+dy, z+dz), leaves, holder);
-            }
-        }
-        // Village huts on the Overworld.
-        if (type == RealmType.Overworld)
-        {
-            BuildHut(new Vector3Int(-8, baseHeight + 1, 7), holder);
-            BuildHut(new Vector3Int(8, baseHeight + 1, -8), holder);
-        }
-        if (RealmManager.Instance != null) RealmManager.Instance.SetMessage(type + " generated");
-    }
-
-    void BuildHut(Vector3Int p, Transform holder)
-    {
-        for (int x=0; x<5; x++) for (int z=0; z<5; z++)
-        {
-            CreateBlock(p + new Vector3Int(x,0,z), wood, holder);
-            for (int y=1; y<4; y++)
-            {
-                if (x==0 || x==4 || z==0 || z==4)
-                    if (!(x==2 && z==0 && y<3)) CreateBlock(p + new Vector3Int(x,y,z), dirt, holder);
-            }
-        }
-        for (int x=-1; x<=5; x++) for (int z=-1; z<=5; z++)
-            CreateBlock(p + new Vector3Int(x,4,z), wood, holder);
-    }
-
-    Material TopMaterial(RealmType t)
-    {
-        switch(t) { case RealmType.Nether: return nether; case RealmType.Aether: return aether; case RealmType.End: return endStone; default: return grass; }
-    }
-    Material MidMaterial(RealmType t)
-    {
-        switch(t) { case RealmType.Nether: return nether; case RealmType.Aether: return aether; case RealmType.End: return endStone; default: return dirt; }
-    }
-    Material DeepMaterial(RealmType t)
-    {
-        switch(t) { case RealmType.Nether: return stone; case RealmType.Aether: return aether; case RealmType.End: return stone; default: return stone; }
-    }
-
-    public GameObject CreateBlock(Vector3Int pos, Material material, Transform parent = null)
-    {
-        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        go.name = "Block_" + pos.x + "_" + pos.y + "_" + pos.z;
-        go.transform.position = pos;
-        go.transform.SetParent(parent != null ? parent : transform, true);
-        go.GetComponent<Renderer>().sharedMaterial = material;
-        var marker = go.AddComponent<BlockMarker>();
-        marker.world = this;
-        marker.gridPosition = pos;
-        blocks[pos] = go;
-        return go;
-    }
-
-    public void RemoveBlock(BlockMarker marker)
-    {
-        if (marker == null) return;
-        blocks.Remove(marker.gridPosition);
-        Destroy(marker.gameObject);
-    }
-
-    public Material GetBuildMaterial(int index)
-    {
-        switch(index % 5) { case 0: return grass; case 1: return dirt; case 2: return stone; case 3: return wood; default: return leaves; }
-    }
-}
-""",
-"Assets/Scripts/BlockMarker.cs": r"""
-using UnityEngine;
-public class BlockMarker : MonoBehaviour
-{
-    public VoxelWorld world;
-    public Vector3Int gridPosition;
-}
-""",
-"Assets/Scripts/PlayerController.cs": r"""
-using UnityEngine;
-
-[RequireComponent(typeof(CharacterController))]
-public class PlayerController : MonoBehaviour
-{
-    public float walkSpeed = 6f, sprintSpeed = 9f, jumpHeight = 1.4f, gravity = -24f;
-    public Transform view;
-    public float lookSensitivity = 2.2f;
-    private CharacterController controller;
-    private float pitch, verticalVelocity;
-    private bool captured = true;
+    public static VoxelGameBootstrap I;
+    public enum Dimension { Overworld, Nether, Aether, End }
+    public Dimension CurrentDimension { get; private set; } = Dimension.Overworld;
     public bool CreativeMode { get; private set; }
-    public int health = 100;
-    public int blocks = 24;
-    public int selectedSlot;
-    public int attackDamage = 25;
+    public int Health { get; private set; } = 100;
+    public int Wood { get; private set; } = 12;
+    public int Stone { get; private set; } = 24;
+    public int Crystal { get; private set; } = 0;
+    public int Food { get; private set; } = 5;
+    public string Status = "Explore, gather, build and survive.";
+    public Material grassMat, dirtMat, stoneMat, woodMat, leafMat, lavaMat, crystalMat, portalMat, obsidianMat, sandMat;
+    readonly List<GameObject> generated = new List<GameObject>();
+    readonly List<GameObject> mobs = new List<GameObject>();
 
+    void Awake() { I = this; }
     void Start()
     {
-        controller = GetComponent<CharacterController>();
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
-        if (!view) view = Camera.main.transform;
+        Application.targetFrameRate = 90;
+        CreateMaterials();
+        SetupLighting();
+        if (FindObjectOfType<VoxelPlayerController>() == null) CreatePlayer();
+        if (FindObjectOfType<VoxelHUD>() == null) new GameObject("Voxel HUD").AddComponent<VoxelHUD>();
+        BuildDimension(Dimension.Overworld);
     }
 
-    void Update()
+    Material MakeMat(string name, Color color, bool emission = false)
     {
-        if (Input.GetKeyDown(KeyCode.Escape))
-        {
-            captured = !captured;
-            Cursor.lockState = captured ? CursorLockMode.Locked : CursorLockMode.None;
-            Cursor.visible = !captured;
-        }
-        if (captured)
-        {
-            float mx = Input.GetAxis("Mouse X") * lookSensitivity;
-            float my = Input.GetAxis("Mouse Y") * lookSensitivity;
-            transform.Rotate(0, mx, 0);
-            pitch = Mathf.Clamp(pitch - my, -85, 85);
-            view.localRotation = Quaternion.Euler(pitch, 0, 0);
-        }
-
-        if (Input.GetKeyDown(KeyCode.E))
-        {
-            CreativeMode = !CreativeMode;
-            if (HUDController.Instance) HUDController.Instance.ShowMessage(CreativeMode ? "CREATIVE MODE — unlimited blocks, no damage" : "SURVIVAL MODE");
-        }
-        for (int i=0;i<5;i++) if (Input.GetKeyDown(KeyCode.Alpha1+i)) selectedSlot=i;
-        if (Input.GetKeyDown(KeyCode.C))
-        {
-            if (CreativeMode) HUDController.Instance?.ShowMessage("Creative: crafting is unnecessary");
-            else { blocks += 8; HUDController.Instance?.ShowMessage("Crafted 8 building blocks"); }
-        }
-        if (Input.GetKeyDown(KeyCode.Space) && controller.isGrounded) verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
-        if (!controller.isGrounded) verticalVelocity += gravity * Time.deltaTime; else if (verticalVelocity < 0) verticalVelocity = -2f;
-        float speed = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : walkSpeed;
-        Vector3 move = transform.right * Input.GetAxisRaw("Horizontal") + transform.forward * Input.GetAxisRaw("Vertical");
-        if (move.sqrMagnitude > 1) move.Normalize();
-        controller.Move((move * speed + Vector3.up * verticalVelocity) * Time.deltaTime);
-
-        if (Input.GetMouseButtonDown(0)) MineOrAttack();
-        if (Input.GetMouseButtonDown(1)) PlaceBlock();
-        if (HUDController.Instance) HUDController.Instance.Refresh(this);
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Standard");
+        Material m = new Material(shader) { name = name, color = color };
+        if (emission) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", color * 1.6f); }
+        return m;
     }
-
-    void MineOrAttack()
+    void CreateMaterials()
     {
-        if (!captured) return;
-        Ray ray = new Ray(view.position, view.forward);
-        if (Physics.Raycast(ray, out RaycastHit hit, 5f))
+        grassMat = MakeMat("Grass", new Color(.20f,.48f,.19f));
+        dirtMat = MakeMat("Dirt", new Color(.34f,.22f,.13f));
+        stoneMat = MakeMat("Stone", new Color(.43f,.46f,.49f));
+        woodMat = MakeMat("Wood", new Color(.42f,.25f,.11f));
+        leafMat = MakeMat("Leaves", new Color(.10f,.36f,.12f));
+        lavaMat = MakeMat("Lava Glow", new Color(1f,.18f,.02f), true);
+        crystalMat = MakeMat("Aether Crystal", new Color(.12f,.82f,1f), true);
+        portalMat = MakeMat("Portal Glow", new Color(.60f,.12f,1f), true);
+        obsidianMat = MakeMat("Obsidian", new Color(.08f,.055f,.15f));
+        sandMat = MakeMat("Ash Sand", new Color(.65f,.54f,.40f));
+    }
+    void SetupLighting()
+    {
+        RenderSettings.ambientLight = new Color(.52f,.56f,.62f);
+        Light light = FindObjectOfType<Light>();
+        if (!light) { GameObject sun = new GameObject("Sunlight"); light = sun.AddComponent<Light>(); light.type = LightType.Directional; sun.transform.rotation = Quaternion.Euler(48,-30,0); }
+        light.intensity = 1.2f;
+    }
+    void CreatePlayer()
+    {
+        GameObject p = new GameObject("Player");
+        p.transform.position = new Vector3(0, 5, -4);
+        p.AddComponent<CharacterController>();
+        VoxelPlayerController controller = p.AddComponent<VoxelPlayerController>();
+        GameObject cameraObject = new GameObject("Player Camera");
+        cameraObject.transform.SetParent(p.transform);
+        cameraObject.transform.localPosition = new Vector3(0, 1.55f, 0);
+        Camera cam = cameraObject.AddComponent<Camera>();
+        cam.fieldOfView = 75;
+        cam.tag = "MainCamera";
+        if (!FindObjectOfType<AudioListener>()) cameraObject.AddComponent<AudioListener>();
+        controller.view = cameraObject.transform;
+    }
+    GameObject Cube(string name, Vector3 pos, Vector3 scale, Material mat)
+    {
+        GameObject g = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        g.name = name; g.transform.position = pos; g.transform.localScale = scale;
+        if (mat) g.GetComponent<Renderer>().sharedMaterial = mat;
+        generated.Add(g);
+        return g;
+    }
+    void BuildDimension(Dimension d)
+    {
+        CurrentDimension = d;
+        foreach (GameObject g in generated) if (g) Destroy(g);
+        generated.Clear();
+        foreach (GameObject m in mobs) if (m) Destroy(m);
+        mobs.Clear();
+
+        RenderSettings.fog = true;
+        RenderSettings.fogColor = SkyColor(d);
+        RenderSettings.fogDensity = d == Dimension.Nether ? .018f : .004f;
+        RenderSettings.ambientLight = d == Dimension.Nether ? new Color(.42f,.16f,.11f) : new Color(.52f,.56f,.62f);
+        if (Camera.main) Camera.main.backgroundColor = SkyColor(d);
+
+        BuildTerrain(d);
+        if (d == Dimension.Overworld)
         {
-            EnemyAI enemy = hit.collider.GetComponentInParent<EnemyAI>();
-            if (enemy != null) { enemy.TakeDamage(attackDamage); return; }
-            BlockMarker block = hit.collider.GetComponent<BlockMarker>();
-            if (block != null && block.world != null)
+            BuildVillage();
+            BuildTree(6,0,6); BuildTree(-8,0,7); BuildTree(9,0,-8); BuildTree(-12,0,-5);
+            BuildPatch(10,-8,5,sandMat);
+        }
+        else if (d == Dimension.Nether)
+        {
+            for (int i=0;i<12;i++) Cube("Lava Pool", new Vector3(Random.Range(-18,18), .08f, Random.Range(-18,18)), new Vector3(Random.Range(2,5),.15f,Random.Range(2,5)), lavaMat);
+            BuildFortress();
+        }
+        else if (d == Dimension.Aether)
+        {
+            for (int i=0;i<8;i++)
             {
-                block.world.RemoveBlock(block);
-                if (!CreativeMode) blocks += 1;
-                HUDController.Instance?.ShowMessage("Block mined");
+                Vector3 c = new Vector3(Random.Range(-18,18), Random.Range(6,12), Random.Range(-18,18));
+                for (int x=-2;x<=2;x++) for (int z=-2;z<=2;z++) Cube("Floating Island", c+new Vector3(x,0,z), Vector3.one, i%2==0?grassMat:stoneMat);
+                Cube("Aether Crystal", c+Vector3.up, Vector3.one*.65f, crystalMat);
             }
         }
-    }
+        else
+        {
+            for (int i=0;i<8;i++)
+            {
+                Vector3 c = new Vector3(Random.Range(-18,18),0,Random.Range(-18,18));
+                Cube("Obsidian Tower", c+new Vector3(0,Random.Range(3,9),0), new Vector3(2,Random.Range(6,18),2), obsidianMat);
+            }
+        }
+        CreatePortal();
+        SpawnMobs(d);
+        if (d == Dimension.End) SpawnBoss("Void Dragon", new Color(.28f,.08f,.42f), 300);
+        else if (d == Dimension.Nether) SpawnBoss("Infernal Brute", new Color(.85f,.12f,.035f), 220);
+        else if (d == Dimension.Aether) SpawnBoss("Storm Guardian", new Color(.08f,.65f,.95f), 200);
 
+        VoxelPlayerController player = FindObjectOfType<VoxelPlayerController>();
+        if (player) { player.transform.position = new Vector3(0, d == Dimension.Aether ? 14 : 4, -4); player.ResetMotion(); }
+        Status = d + " loaded. Explore and find the glowing portal.";
+    }
+    Color SkyColor(Dimension d)
+    {
+        switch (d)
+        {
+            case Dimension.Nether: return new Color(.22f,.055f,.035f);
+            case Dimension.Aether: return new Color(.30f,.68f,.95f);
+            case Dimension.End: return new Color(.035f,.015f,.07f);
+            default: return new Color(.48f,.72f,.95f);
+        }
+    }
+    void BuildTerrain(Dimension d)
+    {
+        for (int x=-22;x<=22;x++) for (int z=-22;z<=22;z++)
+        {
+            float h = d == Dimension.Overworld ? Mathf.PerlinNoise((x+50)*.09f,(z+50)*.09f)*2.1f : 0;
+            Material top = d==Dimension.Nether ? obsidianMat : d==Dimension.End ? obsidianMat : d==Dimension.Aether ? crystalMat : grassMat;
+            if (d==Dimension.Nether && Mathf.PerlinNoise(x*.2f,z*.2f)>.76f) top=stoneMat;
+            Cube("Voxel Block", new Vector3(x, Mathf.Floor(h), z), Vector3.one, top);
+            Cube("Subsoil Block", new Vector3(x, Mathf.Floor(h)-1, z), Vector3.one, d==Dimension.Overworld?dirtMat:stoneMat);
+            if (d==Dimension.Overworld && (x*x+z*z)>150 && Random.value<.012f)
+                Cube("Crystal Ore", new Vector3(x,Mathf.Floor(h)+.55f,z),Vector3.one*.42f,crystalMat);
+        }
+    }
+    void BuildTree(int x,int y,int z)
+    {
+        int h=Random.Range(4,7);
+        for(int i=1;i<=h;i++) Cube("Tree Trunk",new Vector3(x,y+i,z),Vector3.one,woodMat);
+        for(int yy=h-1;yy<=h+1;yy++) for(int xx=-2;xx<=2;xx++) for(int zz=-2;zz<=2;zz++)
+            if(Mathf.Abs(xx)+Mathf.Abs(zz)+(yy==h?0:1)<5) Cube("Leaf Block",new Vector3(x+xx,y+yy,z+zz),Vector3.one,leafMat);
+    }
+    void BuildPatch(int x,int z,int size,Material mat)
+    {
+        for(int xx=0;xx<size;xx++) for(int zz=0;zz<size;zz++) Cube("Biome Patch",new Vector3(x+xx,.55f,z+zz),Vector3.one,mat);
+    }
+    void BuildVillage()
+    {
+        for(int i=0;i<4;i++)
+        {
+            int x=-12+i*6, z=8+(i%2)*4;
+            for(int xx=0;xx<4;xx++) for(int zz=0;zz<4;zz++) Cube("Village Floor",new Vector3(x+xx,1,z+zz),Vector3.one,woodMat);
+            for(int yy=2;yy<5;yy++) for(int xx=0;xx<4;xx++) for(int zz=0;zz<4;zz++)
+                if(xx==0||xx==3||zz==0||zz==3) Cube("Village Wall",new Vector3(x+xx,yy,z+zz),Vector3.one,yy==4?woodMat:dirtMat);
+            for(int xx=-1;xx<5;xx++) for(int zz=-1;zz<5;zz++) Cube("Village Roof",new Vector3(x+xx,5,z+zz),Vector3.one,obsidianMat);
+            GameObject villager=GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            villager.name="Villager Trader"; villager.transform.position=new Vector3(x+2,2,z+2); villager.transform.localScale=new Vector3(.7f,1.15f,.7f);
+            villager.GetComponent<Renderer>().material=MakeMat("Villager Tunic",new Color(.55f,.32f,.18f));
+            generated.Add(villager);
+        }
+    }
+    void BuildFortress()
+    {
+        for(int x=-5;x<=5;x++) for(int z=8;z<=12;z++) Cube("Nether Fortress Floor",new Vector3(x,2,z),Vector3.one,obsidianMat);
+        for(int x=-5;x<=5;x++) for(int y=2;y<=6;y++)
+        {
+            Cube("Fortress Wall",new Vector3(x,y,8),Vector3.one,obsidianMat);
+            Cube("Fortress Wall",new Vector3(x,y,12),Vector3.one,obsidianMat);
+        }
+    }
+    void CreatePortal()
+    {
+        GameObject portal=Cube("Dimension Portal",new Vector3(0,2,17),new Vector3(3,4,.45f),portalMat);
+        portal.GetComponent<BoxCollider>().isTrigger=true;
+        Rigidbody rb=portal.AddComponent<Rigidbody>(); rb.isKinematic=true; rb.useGravity=false;
+        portal.AddComponent<PortalTrigger>();
+    }
+    void SpawnMobs(Dimension d)
+    {
+        int count=d==Dimension.Overworld?5:7;
+        for(int i=0;i<count;i++)
+        {
+            GameObject mob=GameObject.CreatePrimitive(PrimitiveType.Cube);
+            mob.name=d==Dimension.Overworld?(i%2==0?"Hostile Zombie":"Jungle Spider"):d==Dimension.Nether?"Magma Fiend":d==Dimension.Aether?"Sky Wraith":"End Stalker";
+            mob.transform.position=new Vector3(Random.Range(-16,16),2,Random.Range(1,20));
+            mob.transform.localScale=new Vector3(1,1.6f,1);
+            Color c=d==Dimension.Nether?new Color(.9f,.18f,.035f):d==Dimension.Aether?new Color(.12f,.65f,.95f):d==Dimension.End?new Color(.4f,.1f,.55f):new Color(.25f,.38f,.18f);
+            mob.GetComponent<Renderer>().material=MakeMat(mob.name,c,d!=Dimension.Overworld);
+            VoxelMob ai=mob.AddComponent<VoxelMob>(); ai.damage=CreativeMode?0:8;
+            mobs.Add(mob);
+        }
+    }
+    void SpawnBoss(string name,Color color,int hp)
+    {
+        GameObject boss=GameObject.CreatePrimitive(PrimitiveType.Cube);
+        boss.name=name+" BOSS"; boss.transform.position=new Vector3(0,3,11); boss.transform.localScale=new Vector3(3.5f,4,3.5f);
+        boss.GetComponent<Renderer>().material=MakeMat(name,color,true);
+        boss.AddComponent<VoxelBoss>().health=hp;
+    }
+    public void ChangeDimension(){BuildDimension((Dimension)(((int)CurrentDimension+1)%4));}
+    public void ToggleMode(){CreativeMode=!CreativeMode;Status=CreativeMode?"Creative mode: unlimited building, no damage.":"Survival mode: gather resources and watch health.";}
+    public void DamagePlayer(int amount)
+    {
+        if(CreativeMode)return;
+        Health=Mathf.Max(0,Health-amount);
+        if(Health<=0){Health=100;VoxelPlayerController p=FindObjectOfType<VoxelPlayerController>();if(p)p.transform.position=new Vector3(0,5,-4);Status="You respawned. Keep exploring!";}
+    }
+    public void Heal(int amount){Health=Mathf.Min(100,Health+amount);}
+    public void Gather(string kind)
+    {
+        if(kind=="wood")Wood+=3;else if(kind=="stone")Stone+=3;else if(kind=="crystal")Crystal+=1;
+        Status="Gathered "+kind+". Wood "+Wood+" | Stone "+Stone+" | Crystal "+Crystal;
+    }
+    public bool SpendBuildBlock()
+    {
+        if(CreativeMode)return true;
+        if(Stone>0){Stone--;return true;}
+        Status="Out of stone. Press C to craft if you have crystal.";return false;
+    }
+    public void Craft()
+    {
+        if(Crystal>0){Crystal--;Stone+=3;Status="Crafted 3 stone blocks.";}
+        else if(Wood>=3){Wood-=3;Food++;Status="Crafted a ration (+1 food).";}
+        else Status="Need 1 crystal or 3 wood to craft.";
+    }
+    public void Eat()
+    {
+        if(Food>0){Food--;Heal(25);Status="Ate food (+25 health).";}else Status="No food left. Gather resources.";
+    }
+}
+''',
+"Assets/Scripts/VoxelPlayerController.cs": r'''
+using UnityEngine;
+[RequireComponent(typeof(CharacterController))]
+public class VoxelPlayerController : MonoBehaviour
+{
+    public Transform view;
+    public float speed=6f, sprintSpeed=9f, jumpHeight=1.4f, mouseSensitivity=2.2f;
+    CharacterController cc; float verticalVelocity, pitch, attackCooldown;
+    void Start(){cc=GetComponent<CharacterController>();Cursor.lockState=CursorLockMode.Locked;Cursor.visible=false;}
+    void Update()
+    {
+        if(!cc)cc=GetComponent<CharacterController>();
+        if(Input.GetKeyDown(KeyCode.Escape)){Cursor.lockState=CursorLockMode.None;Cursor.visible=true;}
+        if(Cursor.lockState==CursorLockMode.None&&Input.GetMouseButtonDown(0)){Cursor.lockState=CursorLockMode.Locked;Cursor.visible=false;}
+        if(Cursor.lockState==CursorLockMode.Locked)
+        {
+            transform.Rotate(0,Input.GetAxis("Mouse X")*mouseSensitivity,0);
+            pitch=Mathf.Clamp(pitch-Input.GetAxis("Mouse Y")*mouseSensitivity,-85,85);
+            if(view)view.localRotation=Quaternion.Euler(pitch,0,0);
+        }
+        Vector3 move=transform.right*Input.GetAxis("Horizontal")+transform.forward*Input.GetAxis("Vertical");
+        float s=Input.GetKey(KeyCode.LeftShift)?sprintSpeed:speed;
+        if(cc.isGrounded&&verticalVelocity<0)verticalVelocity=-2f;
+        if(Input.GetButtonDown("Jump")&&cc.isGrounded)verticalVelocity=Mathf.Sqrt(jumpHeight*-2f*Physics.gravity.y);
+        verticalVelocity+=Physics.gravity.y*Time.deltaTime;
+        cc.Move((move*s+Vector3.up*verticalVelocity)*Time.deltaTime);
+        attackCooldown-=Time.deltaTime;
+        if(Input.GetMouseButtonDown(0)&&attackCooldown<=0){Attack();attackCooldown=.35f;}
+        if(Input.GetMouseButtonDown(1))PlaceBlock();
+        if(Input.GetKeyDown(KeyCode.Alpha1))VoxelGameBootstrap.I.Gather("wood");
+        if(Input.GetKeyDown(KeyCode.Alpha2))VoxelGameBootstrap.I.Gather("stone");
+        if(Input.GetKeyDown(KeyCode.Alpha3))VoxelGameBootstrap.I.Gather("crystal");
+    }
+    void Attack()
+    {
+        if(!view)return;
+        if(Physics.Raycast(new Ray(view.position,view.forward),out RaycastHit hit,4.5f))
+        {
+            VoxelMob mob=hit.collider.GetComponent<VoxelMob>();if(mob){mob.TakeDamage(25);return;}
+            VoxelBoss boss=hit.collider.GetComponent<VoxelBoss>();if(boss){boss.TakeDamage(20);return;}
+            string n=hit.collider.gameObject.name;
+            if(n.Contains("Ore")||n.Contains("Crystal"))VoxelGameBootstrap.I.Gather("crystal");
+            else if(n.Contains("Tree")||n.Contains("Leaf"))VoxelGameBootstrap.I.Gather("wood");
+            else if(n.Contains("Voxel")||n.Contains("Subsoil"))VoxelGameBootstrap.I.Gather("stone");
+        }
+    }
     void PlaceBlock()
     {
-        if (!captured || (!CreativeMode && blocks <= 0)) return;
-        Ray ray = new Ray(view.position, view.forward);
-        if (Physics.Raycast(ray, out RaycastHit hit, 5f))
+        if(!view||!VoxelGameBootstrap.I.SpendBuildBlock())return;
+        if(Physics.Raycast(new Ray(view.position,view.forward),out RaycastHit hit,6f))
         {
-            Vector3 p = hit.point + hit.normal * .51f;
-            Vector3Int grid = new Vector3Int(Mathf.RoundToInt(p.x), Mathf.RoundToInt(p.y), Mathf.RoundToInt(p.z));
-            if (Vector3.Distance(transform.position, grid) < 2f) return;
-            var world = FindObjectOfType<VoxelWorld>();
-            if (world != null) world.CreateBlock(grid, world.GetBuildMaterial(selectedSlot));
-            if (!CreativeMode) blocks--;
+            Vector3 p=hit.point+hit.normal*.51f;p=new Vector3(Mathf.Round(p.x),Mathf.Round(p.y),Mathf.Round(p.z));
+            GameObject g=GameObject.CreatePrimitive(PrimitiveType.Cube);g.name="Player Placed Block";g.transform.position=p;
+            g.GetComponent<Renderer>().material=VoxelGameBootstrap.I.stoneMat;
         }
     }
-
-    public void Damage(int amount)
-    {
-        if (CreativeMode) return;
-        health = Mathf.Max(0, health - amount);
-        if (health <= 0)
-        {
-            health = 100;
-            transform.position = new Vector3(0, 12, 0);
-            HUDController.Instance?.ShowMessage("You were defeated — respawned at the portal hub");
-        }
-    }
+    public void ResetMotion(){verticalVelocity=0;if(cc){cc.enabled=false;cc.enabled=true;}}
 }
-""",
-"Assets/Scripts/EnemyAI.cs": r"""
+''',
+"Assets/Scripts/VoxelMob.cs": r'''
 using UnityEngine;
-
-public class EnemyAI : MonoBehaviour
+public class VoxelMob : MonoBehaviour
 {
-    public int maxHealth = 60;
-    public int damage = 8;
-    public float speed = 2.2f;
-    public bool boss;
-    private int health;
-    private Transform target;
-    private float nextHit;
-
-    void Start() { health = maxHealth; FindTarget(); }
-    void FindTarget()
-    {
-        var p = FindObjectOfType<PlayerController>();
-        if (p) target = p.transform;
-    }
+    public int health=50, damage=8;
+    Transform player; float attackTimer,wanderTimer; Vector3 wander;
+    void Start(){VoxelPlayerController p=FindObjectOfType<VoxelPlayerController>();if(p)player=p.transform;wander=Random.insideUnitSphere*5;}
     void Update()
     {
-        if (!target) { FindTarget(); return; }
-        float d = Vector3.Distance(transform.position, target.position);
-        if (d < (boss ? 24f : 15f))
+        if(!player)return;
+        float d=Vector3.Distance(transform.position,player.position);
+        if(d<14)
         {
-            Vector3 direction = target.position - transform.position; direction.y = 0;
-            if (direction.sqrMagnitude > 0.1f)
-            {
-                transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(direction), Time.deltaTime * 4);
-                if (d > 1.8f) transform.position += transform.forward * speed * Time.deltaTime;
-            }
-            if (d < 2.2f && Time.time > nextHit)
-            {
-                nextHit = Time.time + 1.5f;
-                target.GetComponent<PlayerController>()?.Damage(damage);
-            }
+            Vector3 dir=player.position-transform.position;dir.y=0;
+            if(dir.sqrMagnitude>.1f)transform.rotation=Quaternion.LookRotation(dir);
+            if(d>1.8f)transform.position+=transform.forward*2.1f*Time.deltaTime;
+            else{attackTimer-=Time.deltaTime;if(attackTimer<=0){VoxelGameBootstrap.I.DamagePlayer(damage);attackTimer=1.4f;}}
+        }
+        else
+        {
+            wanderTimer-=Time.deltaTime;
+            if(wanderTimer<=0){wander=Random.insideUnitSphere*7;wander.y=0;wanderTimer=3;}
+            transform.position=Vector3.MoveTowards(transform.position,player.position+wander,Time.deltaTime*.5f);
         }
     }
-    public void TakeDamage(int amount)
-    {
-        health -= amount;
-        if (health <= 0)
-        {
-            if (boss) RealmManager.Instance?.SetMessage("BOSS DEFEATED! Realm champion!");
-            Destroy(gameObject);
-        }
-        else if (HUDController.Instance) HUDController.Instance.ShowMessage((boss ? "Boss" : "Slime") + " HP: " + health + "/" + maxHealth);
-    }
+    public void TakeDamage(int amount){health-=amount;if(health<=0){VoxelGameBootstrap.I.Gather("crystal");Destroy(gameObject);}}
 }
-""",
-"Assets/Scripts/RealmPortal.cs": r"""
+''',
+"Assets/Scripts/VoxelBoss.cs": r'''
 using UnityEngine;
-
-public class RealmPortal : MonoBehaviour
+public class VoxelBoss : MonoBehaviour
 {
-    public RealmType destination;
-    private Transform player;
-    void Start() { var p = FindObjectOfType<PlayerController>(); if (p) player = p.transform; }
+    public int health=250;
+    Transform player; float timer;
+    void Start(){VoxelPlayerController p=FindObjectOfType<VoxelPlayerController>();if(p)player=p.transform;}
     void Update()
     {
-        if (!player) { var p = FindObjectOfType<PlayerController>(); if(p) player=p.transform; return; }
-        if (Vector3.Distance(player.position, transform.position) < 3f && Input.GetKeyDown(KeyCode.F))
-            RealmManager.Instance?.SwitchRealm(destination);
+        if(!player)return;
+        Vector3 dir=player.position-transform.position;dir.y=0;
+        if(dir.sqrMagnitude>.1f)transform.rotation=Quaternion.LookRotation(dir);
+        if(Vector3.Distance(player.position,transform.position)>3)transform.position+=transform.forward*1.2f*Time.deltaTime;
+        timer-=Time.deltaTime;
+        if(timer<=0&&Vector3.Distance(player.position,transform.position)<5){VoxelGameBootstrap.I.DamagePlayer(15);timer=2.2f;}
     }
-    void OnGUI()
-    {
-        if (player && Vector3.Distance(player.position, transform.position) < 3f)
-        {
-            GUI.Box(new Rect(Screen.width/2-115, Screen.height-110, 230, 30), "Press F: Enter " + destination);
-        }
-    }
+    public void TakeDamage(int amount){health-=amount;if(health<=0){VoxelGameBootstrap.I.Gather("crystal");VoxelGameBootstrap.I.Gather("stone");Destroy(gameObject);}}
 }
-""",
-"Assets/Scripts/HUDController.cs": r"""
+''',
+"Assets/Scripts/PortalTrigger.cs": r'''
 using UnityEngine;
-
-public class HUDController : MonoBehaviour
+public class PortalTrigger : MonoBehaviour
 {
-    public static HUDController Instance { get; private set; }
-    private string message = "";
-    private float messageUntil;
-    private GUIStyle label, title, center;
-    void Awake() { Instance = this; }
-    public void ShowMessage(string text) { message = text; messageUntil = Time.time + 3f; }
-    public void Refresh(PlayerController p) { }
+    bool cooldown;
+    void OnTriggerEnter(Collider other)
+    {
+        if(!cooldown&&other.GetComponent<VoxelPlayerController>())
+        {
+            cooldown=true;VoxelGameBootstrap.I.ChangeDimension();Invoke(nameof(ResetCooldown),1.5f);
+        }
+    }
+    void ResetCooldown(){cooldown=false;}
+}
+''',
+"Assets/Scripts/VoxelHUD.cs": r'''
+using UnityEngine;
+public class VoxelHUD : MonoBehaviour
+{
+    GUIStyle title,body,small; Texture2D panel;
+    void Start(){panel=new Texture2D(1,1);panel.SetPixel(0,0,new Color(.025f,.045f,.07f,.88f));panel.Apply();}
     void OnGUI()
     {
-        if (label == null)
+        if(title==null)
         {
-            label = new GUIStyle(GUI.skin.label) { fontSize = 16, normal = { textColor = Color.white } };
-            title = new GUIStyle(label) { fontSize = 22, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            center = new GUIStyle(label) { alignment = TextAnchor.MiddleCenter, fontSize = 20, fontStyle = FontStyle.Bold };
+            title=new GUIStyle(GUI.skin.label);title.fontSize=21;title.fontStyle=FontStyle.Bold;title.normal.textColor=new Color(.15f,.95f,1f);
+            body=new GUIStyle(GUI.skin.label);body.fontSize=14;body.normal.textColor=Color.white;
+            small=new GUIStyle(GUI.skin.label);small.fontSize=12;small.normal.textColor=new Color(.75f,.85f,.9f);
         }
-        var p = FindObjectOfType<PlayerController>();
-        GUI.Box(new Rect(12,12,290,132), "");
-        GUI.Label(new Rect(24,18,270,28), "FOUR REALMS  //  VOXEL SURVIVAL", label);
-        if (p)
-        {
-            GUI.Label(new Rect(24,45,260,24), "Mode: " + (p.CreativeMode ? "CREATIVE" : "SURVIVAL"), label);
-            GUI.Label(new Rect(24,69,260,24), "Health: " + (p.CreativeMode ? "∞" : p.health + "/100"), label);
-            GUI.Label(new Rect(24,93,260,24), "Blocks: " + (p.CreativeMode ? "∞" : p.blocks), label);
-            GUI.Label(new Rect(24,117,260,24), "Hotbar slot: " + (p.selectedSlot+1) + "   [1–5]", label);
-        }
-        GUI.Label(new Rect(Screen.width/2-12, Screen.height/2-12,24,24), "+", center);
-        GUI.Label(new Rect(12, Screen.height-84, 660, 64), "WASD move • Mouse look • Space jump • Shift sprint\nLMB mine/attack • RMB place • E mode • C craft • F portal • Esc cursor", label);
-        if (Time.time < messageUntil) GUI.Label(new Rect(Screen.width/2-260, 48, 520, 36), message, title);
+        VoxelGameBootstrap g=VoxelGameBootstrap.I;if(!g)return;
+        GUI.DrawTexture(new Rect(14,14,365,145),panel);
+        GUI.Label(new Rect(26,19,340,28),"VOXEL REALMS // SURVIVAL",title);
+        GUI.Label(new Rect(26,52,340,21),"Dimension: "+g.CurrentDimension+" | Mode: "+(g.CreativeMode?"Creative":"Survival"),body);
+        GUI.Label(new Rect(26,76,340,21),"Health "+g.Health+"/100 | Food "+g.Food,body);
+        GUI.Label(new Rect(26,100,340,21),"Wood "+g.Wood+" Stone "+g.Stone+" Crystal "+g.Crystal,body);
+        GUI.Label(new Rect(26,126,340,21),g.Status,small);
+        float w=Mathf.Min(Screen.width-28,800);
+        GUI.DrawTexture(new Rect(14,Screen.height-91,w,78),panel);
+        GUI.Label(new Rect(26,Screen.height-85,w-24,20),"WASD move • Mouse look • Space jump • Shift sprint • Left click attack/mine • Right click build",body);
+        GUI.Label(new Rect(26,Screen.height-62,w-24,20),"F cycle dimensions • M creative/survival • C craft • E eat • 1 wood  2 stone  3 crystal • Esc unlock mouse",small);
+        GUI.Label(new Rect(26,Screen.height-40,w-24,20),"Portal is ahead at Z=17. Travel: Overworld → Nether → Aether → End.",small);
+        GUI.Label(new Rect(Screen.width/2-5,Screen.height/2-12,20,24),"+",title);
+        if(Cursor.lockState==CursorLockMode.None)GUI.Label(new Rect(Screen.width/2-100,Screen.height/2+18,220,30),"CLICK TO RESUME",title);
     }
 }
-""",
-"Assets/Editor/FourRealmsBootstrap.cs": r"""
+''',
+"Assets/Editor/BootstrapSceneCreator.cs": r'''
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.SceneManagement;
-using System.IO;
-
-public static class FourRealmsBootstrap
+public static class BootstrapSceneCreator
 {
-    [MenuItem("Four Realms/Create Playable Demo Scene")]
-    public static void CreateScene()
+    [MenuItem("Voxel Realms/Create Playable Scene")]
+    public static void Create()
     {
-        if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
-        var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-        var manager = new GameObject("Realm Manager").AddComponent<RealmManager>();
-        var world = new GameObject("Voxel World").AddComponent<VoxelWorld>();
-        SetupMaterials(world);
-        manager.world = world;
-
-        var ground = new GameObject("World Root");
-        world.transform.SetParent(ground.transform, false);
-        world.Generate(RealmType.Overworld);
-
-        var player = new GameObject("Player");
-        player.transform.position = new Vector3(0, 12, 0);
-        var cc = player.AddComponent<CharacterController>();
-        cc.height = 1.8f; cc.radius = .35f; cc.center = new Vector3(0,.9f,0);
-        var camObj = new GameObject("Player Camera");
-        camObj.tag = "MainCamera";
-        camObj.transform.SetParent(player.transform, false);
-        camObj.transform.localPosition = new Vector3(0,1.55f,0);
-        camObj.AddComponent<Camera>().fieldOfView = 78;
-        camObj.AddComponent<AudioListener>();
-        player.AddComponent<PlayerController>().view = camObj.transform;
-        manager.player = player.transform;
-
-        var light = new GameObject("Sun").AddComponent<Light>();
-        light.type = LightType.Directional; light.intensity = 1.15f;
-        light.transform.rotation = Quaternion.Euler(48,-32,0);
-        RenderSettings.ambientLight = new Color(.55f,.58f,.62f);
-        RenderSettings.fog = true; RenderSettings.fogColor = new Color(.58f,.72f,.82f); RenderSettings.fogDensity = .006f;
-
-        MakeVillager(new Vector3(-5, 7, 7));
-        MakeVillager(new Vector3(11, 7, -8));
-        MakeEnemy(new Vector3(5, 7, 4), false, new Color(.25f,.85f,.3f));
-        MakeEnemy(new Vector3(13, 7, 11), false, new Color(.25f,.85f,.3f));
-        MakeEnemy(new Vector3(0, 7, 17), true, new Color(.7f,.12f,.85f));
-
-        MakePortal(new Vector3(-12, 7, 0), RealmType.Nether, new Color(1f,.15f,.05f));
-        MakePortal(new Vector3(12, 7, 0), RealmType.Aether, new Color(.15f,.8f,1f));
-        MakePortal(new Vector3(0, 7, -13), RealmType.End, new Color(.65f,.2f,1f));
-        MakePortal(new Vector3(0, 7, 13), RealmType.Overworld, new Color(.25f,1f,.4f));
-
-        new GameObject("HUD").AddComponent<HUDController>();
-
-        string folder = "Assets/Scenes";
-        if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-        string path = folder + "/FourRealmsDemo.unity";
-        EditorSceneManager.SaveScene(scene, path);
-        AssetDatabase.SaveAssets();
-        AssetDatabase.Refresh();
-        Selection.activeObject = AssetDatabase.LoadAssetAtPath<SceneAsset>(path);
-        EditorGUIUtility.PingObject(Selection.activeObject);
-        Debug.Log("Four Realms demo created at " + path + ". Press Play to begin.");
+        var scene=EditorSceneManager.NewScene(NewSceneSetup.EmptyScene,NewSceneMode.Single);
+        var bootstrap=new GameObject("Voxel Game Bootstrap");
+        bootstrap.AddComponent<VoxelGameBootstrap>();
+        var sun=new GameObject("Sunlight");
+        var light=sun.AddComponent<Light>();
+        light.type=LightType.Directional;light.intensity=1.2f;sun.transform.rotation=Quaternion.Euler(48,-30,0);
+        EditorSceneManager.SaveScene(scene,"Assets/VoxelSurvival.unity");
+        Selection.activeGameObject=bootstrap;
+        Debug.Log("Voxel Realms scene created at Assets/VoxelSurvival.unity. Press Play.");
     }
-
-    static void SetupMaterials(VoxelWorld w)
+    [InitializeOnLoadMethod]
+    static void CreateSceneIfMissing()
     {
-        w.grass = Mat("Grass", new Color(.25f,.62f,.24f));
-        w.dirt = Mat("Dirt", new Color(.43f,.28f,.16f));
-        w.stone = Mat("Stone", new Color(.42f,.45f,.49f));
-        w.sand = Mat("Sand", new Color(.78f,.69f,.43f));
-        w.nether = Mat("Nether", new Color(.58f,.16f,.12f));
-        w.aether = Mat("Aether", new Color(.45f,.8f,.94f));
-        w.endStone = Mat("End Stone", new Color(.65f,.59f,.75f));
-        w.wood = Mat("Wood", new Color(.35f,.19f,.08f));
-        w.leaves = Mat("Leaves", new Color(.12f,.42f,.16f));
-    }
-    static Material Mat(string name, Color color)
-    {
-        var shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null) shader = Shader.Find("Standard");
-        var mat = new Material(shader) { name = name, color = color };
-        return mat;
-    }
-    static void MakeVillager(Vector3 pos)
-    {
-        var villager = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        villager.name = "Villager"; villager.transform.position = pos;
-        villager.GetComponent<Renderer>().sharedMaterial = Mat("Villager Tunic", new Color(.55f,.35f,.2f));
-        var head = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        head.name = "Villager Head"; head.transform.SetParent(villager.transform);
-        head.transform.localPosition = new Vector3(0,.65f,0); head.transform.localScale = new Vector3(.65f,.65f,.65f);
-        head.GetComponent<Renderer>().sharedMaterial = Mat("Villager Skin", new Color(.82f,.62f,.42f));
-    }
-    static void MakeEnemy(Vector3 pos, bool boss, Color color)
-    {
-        var enemy = GameObject.CreatePrimitive(boss ? PrimitiveType.Cube : PrimitiveType.Sphere);
-        enemy.name = boss ? "Realm Boss" : "Hostile Slime";
-        enemy.transform.position = pos;
-        enemy.transform.localScale = boss ? new Vector3(2.5f,3f,2.5f) : new Vector3(1.25f,1.1f,1.25f);
-        enemy.GetComponent<Renderer>().sharedMaterial = Mat(boss ? "Boss Material" : "Slime Material", color);
-        var ai = enemy.AddComponent<EnemyAI>(); ai.boss = boss; ai.maxHealth = boss ? 400 : 60; ai.damage = boss ? 20 : 8; ai.speed = boss ? 1.5f : 2.2f;
-    }
-    static void MakePortal(Vector3 pos, RealmType destination, Color color)
-    {
-        var portal = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        portal.name = destination + " Portal"; portal.transform.position = pos;
-        portal.transform.localScale = new Vector3(2.3f,4f,.5f);
-        portal.GetComponent<Renderer>().sharedMaterial = Mat(destination + " Portal Glow", color);
-        portal.AddComponent<RealmPortal>().destination = destination;
+        EditorApplication.delayCall += () =>
+        {
+            if (!Application.isPlaying && !System.IO.File.Exists("Assets/VoxelSurvival.unity"))
+                Create();
+        };
     }
 }
-#endif
+'''
+}
+
+manifest = {
+    "dependencies": {
+        "com.unity.ide.visualstudio": "2.0.22",
+        "com.unity.test-framework": "1.1.33",
+        "com.unity.ugui": "1.0.0"
+    }
+}
+files["Packages/manifest.json"] = json.dumps(manifest, indent=2)
+files["ProjectSettings/ProjectVersion.txt"] = "m_EditorVersion: 2022.3.45f1\n"
+files["README.md"] = """# Four-Dimension Voxel Survival — Unity Starter Project
+
+A playable first-person voxel prototype built with runtime-generated cubes and stylized materials. No external art assets are required.
+
+## Included
+- First-person movement, mouse look, jumping and sprinting
+- Survival and creative modes
+- Four dimensions: Overworld, Nether, Aether and End
+- Procedural-looking block terrain, trees, floating islands, lava pools and obsidian towers
+- Village buildings and villager NPCs
+- Hostile mobs that chase and damage the player
+- Boss encounters in the Nether, Aether and End
+- Block placement, resource gathering, simple crafting and food healing
+- HUD with health, mode, dimension and resources
+
+## Requirements
+Unity Hub and Unity Editor 2022.3 LTS or newer. Desktop build target.
+
+## Run
+1. Extract the ZIP.
+2. Open Unity Hub and choose **Add > Add project from disk**.
+3. Select the extracted `FourDimensionVoxelSurvival` folder.
+4. Open the project and wait for scripts to compile.
+5. Open `Assets/VoxelSurvival.unity`. If it isn't present, use **Voxel Realms > Create Playable Scene** from the Unity menu.
+6. Press **Play**.
+
+## Controls
+- **W A S D** — move
+- **Mouse** — look
+- **Space** — jump
+- **Left Shift** — sprint
+- **Left mouse** — attack mobs/bosses or gather blocks in reach
+- **Right mouse** — place a stone block
+- **F** — cycle dimensions (Overworld → Nether → Aether → End)
+- **M** — toggle Survival / Creative
+- **C** — craft: crystal into 3 stone, or 3 wood into food
+- **E** — eat food and restore health
+- **1 / 2 / 3** — prototype resource shortcuts for wood / stone / crystal
+- **Esc** — release mouse; click to recapture
+
+The glowing portal is placed ahead of the spawn point. Press **F** to cycle dimensions immediately.
+
+## Notes
+This is a first playable prototype, not a finished commercial game. The world uses individual cubes and material colors rather than a chunked voxel engine or texture atlas. It is intentionally self-contained; the next steps for a fuller game would be optimized chunk meshes, persistent worlds, real inventory UI, animation, audio, and more sophisticated combat.
 """
-}
-
-# Write project files and zip.
-os.makedirs(root, exist_ok=True)
 for rel, content in files.items():
-    full = os.path.join(root, rel)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w", encoding="utf-8", newline="\n") as f:
-        f.write(textwrap.dedent(content).lstrip())
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
 
-zip_path = "/mnt/data/FourRealms_Unity_Starter.zip"
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-    for base, dirs, filenames in os.walk(root):
+zip_path = "/mnt/data/FourDimensionVoxelSurvival.zip"
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+    for folder, _, filenames in os.walk(root):
         for filename in filenames:
-            full = os.path.join(base, filename)
-            z.write(full, os.path.relpath(full, "/mnt/data"))
+            full = os.path.join(folder, filename)
+            archive.write(full, os.path.relpath(full, root))
 
-print("Created Unity starter ZIP:", zip_path)
-print("Included files:")
-for rel in files:
-    print(" -", rel)
+print(f"Created Unity starter project ZIP: {zip_path}")
+print(f"Included {len(files)} files; archive size: {os.path.getsize(zip_path):,} bytes")
